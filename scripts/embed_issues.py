@@ -6,11 +6,12 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import pickle
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Paths
 input_path = "data/k8s_issues_preprocessed.json"
-vector_path = "embeddings/faiss_index.bin"
-metadata_path = "embeddings/metadata.pkl"
+embeddings_dir = "embeddings"
 
 # Load data
 def load_issues():
@@ -20,31 +21,31 @@ def load_issues():
         return json.load(f)
 
 def main():
-    os.makedirs("embeddings", exist_ok=True)
+    os.makedirs(embeddings_dir, exist_ok=True)
     issues = load_issues()
 
+    # Prepare texts and metadata
     texts = [issue["text"] for issue in issues]
-    metadata = [{"number": issue["number"], "url": issue["url"]} for issue in issues]
+    metadatas = [{"number": str(issue["number"]), "url": issue["url"]} for issue in issues]
 
-    # Load model
+    # Initialize embeddings
     print("🔍 Loading embedding model...")
-    model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2"
+    )
 
-    print("🔢 Generating embeddings...")
-    embeddings = model.encode(texts, show_progress_bar=True)
+    print("🔢 Generating embeddings and creating FAISS index...")
+    # Create FAISS index using LangChain's implementation
+    vector_store = FAISS.from_texts(
+        texts=texts,
+        embedding=embeddings,
+        metadatas=metadatas
+    )
 
-    # Save metadata
-    with open(metadata_path, "wb") as f:
-        pickle.dump(metadata, f)
-
-    # Create FAISS index
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(np.array(embeddings))
-
-    faiss.write_index(index, vector_path)
-    print(f"✅ Saved FAISS index to {vector_path}")
-    print(f"📎 Saved metadata to {metadata_path}")
+    # Save the index
+    print("💾 Saving FAISS index...")
+    vector_store.save_local(embeddings_dir)
+    print(f"✅ Saved FAISS index to {embeddings_dir}/")
 
 if __name__ == "__main__":
     main()
