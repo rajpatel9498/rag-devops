@@ -91,24 +91,15 @@ Answer:"""
                 input_variables=["context", "question"]
             )
             
-            # Improved text splitter configuration
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,  # Smaller chunks for better precision
-                chunk_overlap=200,  # Increased overlap for better context
-                length_function=len,
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
-            )
-            
             logger.info("🔧 Configuring retriever...")
             self.qa_chain = RetrievalQA.from_chain_type(
                 llm=self.llm,
                 chain_type="stuff",
                 retriever=self.vector_store.as_retriever(
                     search_kwargs={
-                        "k": 3,  # Increased from 2 to 3 for better coverage
-                        "fetch_k": 5,  # Fetch more initially
-                        "search_type": "similarity_score_threshold",
-                        "score_threshold": 0.4  # Slightly lower threshold for more context
+                        "k": 3,  # Reduced to avoid context overflow
+                        "fetch_k": 5,
+                        "search_type": "similarity",
                     }
                 ),
                 return_source_documents=True,
@@ -116,8 +107,8 @@ Answer:"""
                     "prompt": PROMPT,
                     "document_variable_name": "context",
                     "document_prompt": PromptTemplate(
-                        template="Issue #{number}: {content}\nURL: {url}\n---\n",
-                        input_variables=["number", "content", "url"]
+                        template="Issue #{number}: {page_content_short}\nURL: {url}\n---\n",
+                        input_variables=["number", "page_content_short", "url"]
                     )
                 }
             )
@@ -151,6 +142,18 @@ Answer:"""
             # Calculate processing time
             processing_time = time.time() - start_time
             
+            # Get similarity scores from the retriever
+            docs_with_scores = self.vector_store.similarity_search_with_score(question, k=5)
+            
+            # Prepare short content for prompt
+            def doc_with_short_content(doc):
+                doc.metadata = dict(doc.metadata) if doc.metadata else {}
+                doc.metadata["page_content_short"] = doc.page_content[:300] + ("..." if len(doc.page_content) > 300 else "")
+                return doc
+            # Patch source documents for prompt
+            if "source_documents" in result:
+                result["source_documents"] = [doc_with_short_content(doc) for doc in result["source_documents"]]
+            
             # Format the response with enhanced metadata
             response = {
                 "answer": result["result"],
@@ -160,18 +163,15 @@ Answer:"""
                         "title": doc.metadata.get("title", "Unknown"),
                         "url": doc.metadata.get("url", "Unknown"),
                         "content": doc.page_content[:200] + "...",
-                        "similarity_score": doc.metadata.get("score", 0.0)
+                        "similarity_score": float(score)  # Convert score to float
                     }
-                    for doc in result["source_documents"]
+                    for doc, score in docs_with_scores
                 ],
                 "processing_time": processing_time,
                 "timestamp": datetime.now().isoformat(),
                 "metrics": {
-                    "num_sources": len(result["source_documents"]),
-                    "avg_similarity_score": sum(
-                        doc.metadata.get("score", 0.0) 
-                        for doc in result["source_documents"]
-                    ) / len(result["source_documents"]) if result["source_documents"] else 0.0
+                    "num_sources": len(docs_with_scores),
+                    "avg_similarity_score": sum(score for _, score in docs_with_scores) / len(docs_with_scores) if docs_with_scores else 0.0
                 }
             }
             
