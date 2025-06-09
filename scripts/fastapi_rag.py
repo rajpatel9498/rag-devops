@@ -5,7 +5,7 @@ from typing import List, Optional
 import time
 from datetime import datetime
 import uvicorn
-from langchain_rag import KubernetesRAG
+from scripts.langchain_rag import KubernetesRAG  # Modify the import path
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded

@@ -66,23 +66,34 @@ class KubernetesRAG:
                 index_name="index",
                 allow_dangerous_deserialization=True
             )
+            
+            # Process documents to add required metadata
+            logger.info("Processing documents to add required metadata...")
+            for doc_id in self.vector_store.index_to_docstore_id.values():
+                doc = self.vector_store.docstore._dict[doc_id]
+                if not hasattr(doc, 'metadata') or doc.metadata is None:
+                    doc.metadata = {}
+                doc.metadata["content_short"] = doc.page_content[:200] + ("..." if len(doc.page_content) > 200 else "")
+                if "number" not in doc.metadata:
+                    doc.metadata["number"] = "Unknown"
+                if "url" not in doc.metadata:
+                    doc.metadata["url"] = "Unknown"
+            
             logger.info(f"✅ FAISS index loaded with {len(self.vector_store.index_to_docstore_id)} documents")
             
             # Enhanced prompt template with more context and structure
-            prompt_template = """You are a Kubernetes expert assistant specialized in issue triage and troubleshooting. 
-Your task is to provide accurate, helpful answers based on the provided context from GitHub issues.
+            prompt_template = """You are a Kubernetes expert assistant. Answer based on the provided GitHub issues.
 
-Context Information:
+Context:
 {context}
 
-User Question: {question}
+Question: {question}
 
 Instructions:
-1. Use ONLY the provided context to answer the question
-2. If the context doesn't contain relevant information, say so
-3. If you're unsure about any part, acknowledge the uncertainty
-4. Include specific issue numbers or references when relevant
-5. Format your response in a clear, structured way
+1. Use ONLY the provided context
+2. If context is insufficient, say so
+3. Include issue numbers when relevant
+4. Be concise and clear
 
 Answer:"""
             
@@ -97,8 +108,8 @@ Answer:"""
                 chain_type="stuff",
                 retriever=self.vector_store.as_retriever(
                     search_kwargs={
-                        "k": 3,  # Reduced to avoid context overflow
-                        "fetch_k": 5,
+                        "k": 2,  # Reduced from 3 to 2
+                        "fetch_k": 3,  # Reduced from 5 to 3
                         "search_type": "similarity",
                     }
                 ),
@@ -107,8 +118,8 @@ Answer:"""
                     "prompt": PROMPT,
                     "document_variable_name": "context",
                     "document_prompt": PromptTemplate(
-                        template="Issue #{number}: {page_content_short}\nURL: {url}\n---\n",
-                        input_variables=["number", "page_content_short", "url"]
+                        template="Issue #{number}: {content_short}\nURL: {url}\n---\n",
+                        input_variables=["number", "content_short", "url"]
                     )
                 }
             )
@@ -138,21 +149,13 @@ Answer:"""
             
             # Get answer from QA chain
             result = self.qa_chain({"query": question})
+            logger.info(f"Generated answer: {result['result']}")  # Debugging statement
             
             # Calculate processing time
             processing_time = time.time() - start_time
             
             # Get similarity scores from the retriever
-            docs_with_scores = self.vector_store.similarity_search_with_score(question, k=5)
-            
-            # Prepare short content for prompt
-            def doc_with_short_content(doc):
-                doc.metadata = dict(doc.metadata) if doc.metadata else {}
-                doc.metadata["page_content_short"] = doc.page_content[:300] + ("..." if len(doc.page_content) > 300 else "")
-                return doc
-            # Patch source documents for prompt
-            if "source_documents" in result:
-                result["source_documents"] = [doc_with_short_content(doc) for doc in result["source_documents"]]
+            docs_with_scores = self.vector_store.similarity_search_with_score(question, k=3)
             
             # Format the response with enhanced metadata
             response = {
@@ -162,7 +165,7 @@ Answer:"""
                         "issue_number": doc.metadata.get("number", "Unknown"),
                         "title": doc.metadata.get("title", "Unknown"),
                         "url": doc.metadata.get("url", "Unknown"),
-                        "content": doc.page_content[:200] + "...",
+                        "content": doc.metadata.get("content_short", doc.page_content[:200] + "..."),
                         "similarity_score": float(score)  # Convert score to float
                     }
                     for doc, score in docs_with_scores
@@ -215,4 +218,4 @@ def main():
             print(f"   Preview: {source['content']}")
 
 if __name__ == "__main__":
-    main() 
+    main()
